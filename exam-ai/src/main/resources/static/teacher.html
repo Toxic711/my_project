@@ -130,7 +130,7 @@ function renderAlert(a) {
   row.innerHTML = `
     <div class="lv"><span class="pill ${lvCls}">${esc(a.level)}</span></div>
     <div>
-      <div>试卷记录 #${esc(a.examRecordId)} · 风险分 <b>${esc(a.riskScore)}</b>${a.evidenceUrl ? ' · <a href="' + esc(a.evidenceUrl) + '" target="_blank">查看截图</a>' : ''}</div>
+      <div>试卷记录 #${esc(a.examRecordId)} · 风险分 <b>${esc(a.riskScore)}</b>${a.evidenceUrl ? ' · <a href="#" data-ev="' + esc(a.evidenceUrl) + '" style="color:var(--pri)">查看截图</a>' : ''}</div>
       <div class="sub">${esc(a.reason || '')}</div>
     </div>
     <div class="sub">${fmtTime(a.createdAt || Date.now())}</div>`;
@@ -140,6 +140,23 @@ function renderAlert(a) {
 }
 
 document.getElementById('btnWs').onclick = connectWs;
+
+/* 截图存证需要带 JWT，不能直接 <a href> 打开 → 用 fetch 拿 blob 再打开 */
+document.getElementById('alertList').addEventListener('click', async ev => {
+  const a = ev.target.closest('[data-ev]');
+  if (!a) return;
+  ev.preventDefault();
+  try {
+    const res = await fetch(location.origin + a.dataset.ev, {
+      headers: { Authorization: 'Bearer ' + Auth.token }
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    window.open(URL.createObjectURL(blob), '_blank');
+  } catch (e) {
+    toast('截图加载失败：' + e.message, 'bad');
+  }
+});
 
 /* ---------------- 考试列表 ---------------- */
 async function loadExams() {

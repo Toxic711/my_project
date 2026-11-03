@@ -2,255 +2,75 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>exam-ai · 接口测试控制台</title>
-<style>
-  :root{--bg:#0f172a;--card:#1e293b;--line:#334155;--fg:#e2e8f0;--muted:#94a3b8;--pri:#38bdf8;--ok:#34d399;--bad:#f87171;--warn:#fbbf24}
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
-  header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
-  header h1{margin:0;font-size:19px}
-  header .hint{color:var(--muted);font-size:12.5px}
-  main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:18px 24px 40px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
-  .card h2{margin:0 0 10px;font-size:14.5px;color:var(--pri);display:flex;align-items:center;gap:8px}
-  .card h2 .num{background:#0b1220;border:1px solid var(--line);border-radius:6px;padding:0 6px;font-size:12px;color:var(--muted)}
-  button{background:#1f2937;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer;margin:3px 4px 3px 0}
-  button:hover{border-color:var(--pri);color:#fff}
-  button.primary{background:var(--pri);color:#06121f;border-color:var(--pri);font-weight:600}
-  button.ghost{background:transparent}
-  input,select,textarea{background:#0b1220;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:inherit}
-  input{width:150px}
-  label{font-size:12px;color:var(--muted);margin-right:4px}
-  .row{margin:6px 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-  pre{background:#0b1220;border:1px solid var(--line);border-radius:6px;padding:9px;max-height:300px;overflow:auto;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
-  .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)} .muted{color:var(--muted)}
-  .tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-size:12px;margin-right:4px}
-  .wide{grid-column:1/-1}
-  table{width:100%;border-collapse:collapse;font-size:12.5px}
-  th,td{border:1px solid var(--line);padding:4px 6px;text-align:left}
-  th{background:#0b1220;color:var(--muted);font-weight:500}
-</style>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>智能在线考试系统 · 登录</title>
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<header>
-  <h1>exam-ai · 接口测试控制台</h1>
-  <span class="hint">同源调用 8081 的真实接口；先点「登录」，再按顺序玩。数据在内存库里，重启即重置。</span>
-  <span class="hint" id="whoami">当前：未登录</span>
-</header>
+<div class="center">
+  <div class="card" style="width:420px">
+    <div class="brand">
+      <div class="logo">考</div>
+      <div>
+        <div class="name">智能在线考试系统</div>
+        <div class="sub">AI 防作弊 · 自动出题 · 实时监考</div>
+      </div>
+    </div>
 
-<main>
-  <!-- 1 登录 -->
-  <section class="card">
-    <h2><span class="num">1</span>登录（JWT）</h2>
-    <div class="row">
+    <div style="margin-top:18px">
       <label>账号</label>
-      <select id="account">
-        <option value="teacher1|teacher123">teacher1（教师）</option>
-        <option value="student1|student123">student1（学生）</option>
-        <option value="admin|admin123">admin（管理员）</option>
-      </select>
-      <button class="primary" onclick="login()">登录</button>
-      <button class="ghost" onclick="logout()">退出</button>
+      <input id="username" placeholder="teacher1 / student1 / admin" autocomplete="username">
+      <label>密码</label>
+      <input id="password" type="password" placeholder="密码" autocomplete="current-password">
+      <button class="primary" style="width:100%;margin-top:16px" id="btnLogin">登录</button>
     </div>
-    <pre id="loginOut" class="muted">未登录</pre>
-  </section>
 
-  <!-- 2 考试 -->
-  <section class="card">
-    <h2><span class="num">2</span>考试流程（列表 → 发卷 → 交卷 → 重复交卷）</h2>
-    <div class="row">
-      <button onclick="listExams()">考试列表</button>
-      <button onclick="startExam()">开始考试（取第一场）</button>
-      <button onclick="submitExam(false)">交卷</button>
-      <button onclick="submitExam(true)">重复交卷（验幂等）</button>
-      <button onclick="result()">看成绩</button>
+    <div class="role-tabs">
+      <button data-u="student1" data-p="student123">学生 student1</button>
+      <button data-u="teacher1" data-p="teacher123">教师 teacher1</button>
+      <button data-u="admin" data-p="admin123">管理员</button>
     </div>
-    <pre id="examOut" class="muted">—</pre>
-  </section>
-
-  <!-- 3 防作弊 -->
-  <section class="card">
-    <h2><span class="num">3</span>AI 防作弊（三档事件 → 告警）</h2>
-    <div class="row">
-      <button onclick="proctor('normal')">正常帧</button>
-      <button onclick="proctor('tilt')">大幅偏转 + 视线离开</button>
-      <button onclick="proctor('missing')">人脸丢失</button>
-      <button onclick="proctor('multi')">多人脸</button>
-      <button class="primary" onclick="alerts()">查告警</button>
+    <div class="sub" style="margin-top:10px">
+      演示账号密码均为「账号名 + 123」；点击上面按钮可自动填充。
     </div>
-    <div class="row muted">规则：L1≥40 提示 / L2≥65 警告 / L3≥85 严重；L3 需连续 3 帧，同级别 3s 去抖（升级放行）</div>
-    <pre id="proctorOut" class="muted">—</pre>
-  </section>
 
-  <!-- 4 LLM -->
-  <section class="card">
-    <h2><span class="num">4</span>LLM 出题 + 成本</h2>
-    <div class="row">
-      <label>知识点</label><input id="kp" value="JVM 内存模型">
-      <label>题数</label><input id="cnt" value="2" style="width:60px">
-      <button class="primary" onclick="genQuestions()">出题（教师）</button>
-      <button onclick="llmUsage()">用量统计</button>
-      <button onclick="cacheStats()">缓存统计</button>
-    </div>
-    <pre id="llmOut" class="muted">—</pre>
-  </section>
+    <div id="err" class="bad" style="margin-top:10px;font-size:13px"></div>
+  </div>
+</div>
 
-  <!-- 5 WebSocket 告警推送 -->
-  <section class="card wide">
-    <h2><span class="num">5</span>WebSocket 实时告警（教师订阅）</h2>
-    <div class="row">
-      <button onclick="wsConnect()">连接 ws://…/ws/proctor</button>
-      <button onclick="wsClose()">断开</button>
-      <span id="wsState" class="muted">未连接</span>
-    </div>
-    <div class="row muted">连接后，切到「3 防作弊」发事件，这里会实时收到推送（需要教师 token）。</div>
-    <pre id="wsOut" class="muted">—</pre>
-  </section>
-
-  <!-- 6 日志 -->
-  <section class="card wide">
-    <h2><span class="num">6</span>请求日志（最近 30 条）</h2>
-    <pre id="log" class="muted">—</pre>
-  </section>
-</main>
-
+<script src="/common.js"></script>
 <script>
-const BASE = location.origin;
-let token = null, role = null, recordId = null, examId = null;
+  // 已登录则直接进对应首页
+  if (Auth.token && Auth.user) location.replace(Auth.home(Auth.user.role));
 
-function log(kind, text) {
-  const el = document.getElementById('log');
-  const time = new Date().toLocaleTimeString();
-  const color = kind === 'ok' ? 'ok' : kind === 'err' ? 'bad' : 'muted';
-  if (el.dataset.init !== '1') { el.textContent = ''; el.dataset.init = '1'; }
-  el.textContent = `[${time}] ` + (kind === 'ok' ? '✓ ' : kind === 'err' ? '✗ ' : '· ') + text + '\n' + el.textContent;
-  const lines = el.textContent.split('\n');
-  if (lines.length > 30) el.textContent = lines.slice(0, 30).join('\n');
-}
+  document.querySelectorAll('.role-tabs button').forEach(b => {
+    b.onclick = () => {
+      document.getElementById('username').value = b.dataset.u;
+      document.getElementById('password').value = b.dataset.p;
+    };
+  });
 
-async function api(method, path, body) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = 'Bearer ' + token;
-  const res = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  const text = await res.text();
-  let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  log(res.ok ? 'ok' : 'err', `${method} ${path} → ${res.status}`);
-  if (!res.ok) throw new Error(`${res.status} ${typeof data === 'string' ? data : JSON.stringify(data)}`);
-  return data;
-}
-
-function show(id, obj) {
-  const el = document.getElementById(id);
-  el.className = '';
-  el.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
-}
-
-document.getElementById('account').onchange = () => {};
-
-async function login() {
-  try {
-    const [u, p] = document.getElementById('account').value.split('|');
-    const r = await api('POST', '/api/auth/login', { username: u, password: p });
-    token = r.token; role = r.user.role;
-    document.getElementById('whoami').textContent = `当前：${r.user.realName || u}（${role}）`;
-    show('loginOut', r);
-  } catch (e) { document.getElementById('loginOut').className = 'bad'; document.getElementById('loginOut').textContent = String(e); }
-}
-
-function logout() { token = null; role = null; document.getElementById('whoami').textContent = '当前：未登录'; }
-
-async function listExams() {
-  try { show('examOut', await api('GET', '/api/exams')); } catch (e) { show('examOut', String(e)); }
-}
-
-async function startExam() {
-  try {
-    const exams = await api('GET', '/api/exams');
-    // 依次尝试可开始的考试（已提交的考试会 409）
-    for (const ex of exams) {
-      try {
-        const r = await api('POST', `/api/exams/${ex.id}/start`);
-        examId = ex.id; recordId = r.recordId;
-        show('examOut', r);
-        return;
-      } catch (e) { /* 换下一场 */ }
+  async function login() {
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    const err = document.getElementById('err');
+    err.textContent = '';
+    if (!username || !password) { err.textContent = '请输入账号和密码'; return; }
+    const btn = document.getElementById('btnLogin');
+    btn.disabled = true; btn.textContent = '登录中…';
+    try {
+      const r = await api('POST', '/api/auth/login', { username, password });
+      Auth.save(r.token, r.user);
+      location.replace(Auth.home(r.user.role));
+    } catch (e) {
+      err.textContent = '登录失败：' + e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = '登录';
     }
-    throw new Error('没有可开始的考试（可能都已提交）。重启应用可重置内存库。');
-  } catch (e) { show('examOut', String(e)); }
-}
+  }
 
-async function submitExam(again) {
-  try {
-    if (!recordId) throw new Error('先点「开始考试」');
-    const r = await api('GET', `/api/exams/records/${recordId}/result`).catch(() => null);
-    const questions = (r ? r.items : []).map(x => x.questionId);
-    // result 只有在已提交时可用；未提交时用开始考试返回的题目
-    let qids = questions;
-    if (!qids.length) {
-      const st = await api('POST', `/api/exams/${examId}/start`);
-      qids = st.questions.map(q => q.id);
-      recordId = st.recordId;
-    }
-    const answers = qids.map(id => ({ questionId: id, answer: 'A' }));
-    show('examOut', await api('POST', `/api/exams/records/${recordId}/submit`,
-      { requestId: again ? 'console-again' : 'console-1', answers }));
-  } catch (e) { show('examOut', String(e)); }
-}
-
-async function result() {
-  try { if (!recordId) throw new Error('先开始考试'); show('examOut', await api('GET', `/api/exams/records/${recordId}/result`)); }
-  catch (e) { show('examOut', String(e)); }
-}
-
-const PROFILES = {
-  normal:  { faceDetected: true,  faceCount: 1, yaw: 3,   pitch: 2,   roll: 1,   gazeOffScreen: false, ear: 0.28 },
-  tilt:    { faceDetected: true,  faceCount: 1, yaw: 46,  pitch: 35,  roll: 30,  gazeOffScreen: true,  ear: 0.14 },
-  missing: { faceDetected: false, faceCount: 0, yaw: 0,   pitch: 0,   roll: 0,   gazeOffScreen: false, ear: 0.0  },
-  multi:   { faceDetected: true,  faceCount: 2, yaw: 0,   pitch: 0,   roll: 0,   gazeOffScreen: false, ear: 0.3  }
-};
-
-async function proctor(kind) {
-  try {
-    if (!recordId) throw new Error('先点「开始考试」拿到 recordId');
-    const body = Object.assign({ examRecordId: recordId, sessionId: 'console', eventTs: Date.now() }, PROFILES[kind]);
-    const r = await api('POST', '/api/proctor/events', body);
-    show('proctorOut', r);
-  } catch (e) { document.getElementById('proctorOut').className = 'bad'; document.getElementById('proctorOut').textContent = String(e); }
-}
-
-async function alerts() {
-  try { if (!recordId) throw new Error('先开始考试'); show('proctorOut', await api('GET', `/api/proctor/alerts?examRecordId=${recordId}`)); }
-  catch (e) { show('proctorOut', String(e)); }
-}
-
-async function genQuestions() {
-  try {
-    show('llmOut', await api('POST', '/api/questions/generate', {
-      type: 'SINGLE', knowledgePoint: document.getElementById('kp').value,
-      count: Number(document.getElementById('cnt').value), difficulty: 'MEDIUM'
-    }));
-  } catch (e) { show('llmOut', String(e)); }
-}
-
-async function llmUsage() { try { show('llmOut', await api('GET', '/api/llm/usage')); } catch (e) { show('llmOut', String(e)); } }
-async function cacheStats() { try { show('llmOut', await api('GET', '/api/stats/cache')); } catch (e) { show('llmOut', String(e)); } }
-
-let ws = null;
-function wsConnect() {
-  if (!token) { alert('先登录（教师账号）'); return; }
-  const url = BASE.replace(/^http/, 'ws') + '/ws/proctor?token=' + encodeURIComponent(token);
-  ws = new WebSocket(url);
-  const st = document.getElementById('wsState');
-  ws.onopen = () => { st.textContent = '已连接'; st.className = 'ok'; log('ok', 'WebSocket 已连接'); };
-  ws.onmessage = (ev) => {
-    const el = document.getElementById('wsOut');
-    if (el.dataset.init !== '1') { el.textContent = ''; el.dataset.init = '1'; }
-    el.textContent = ev.data + '\n' + el.textContent;
-  };
-  ws.onerror = () => { st.textContent = '连接失败（需教师 token）'; st.className = 'bad'; };
-  ws.onclose = () => { st.textContent = '已断开'; st.className = 'muted'; };
-}
-function wsClose() { if (ws) ws.close(); }
+  document.getElementById('btnLogin').onclick = login;
+  document.getElementById('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
 </script>
 </body>
 </html>

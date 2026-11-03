@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>我的考试 · 智能在线考试系统</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+  .layout{display:grid;grid-template-columns:1fr 300px;gap:16px}
+  @media (max-width:980px){.layout{grid-template-columns:1fr}}
+  .q-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .q-stem{font-size:15.5px;line-height:1.7;margin:6px 0 14px}
+  .q-meta{font-size:12.5px;color:var(--muted)}
+  .result-row{display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid #1f2a3d}
+  .result-row:last-child{border-bottom:0}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="left">
+    <div class="brand" style="margin:0"><div class="logo">考</div><div class="name" style="font-size:15px">智能在线考试系统</div></div>
+    <span class="pill" id="roleTag">学生</span>
+  </div>
+  <div class="right">
+    <span id="who"></span>
+    <button class="ghost" onclick="Auth.logout()">退出登录</button>
+  </div>
+</div>
+
+<div class="wrap">
+  <!-- 视图 1：考试列表 -->
+  <section id="view-list">
+    <h2 style="font-size:16px;margin-bottom:4px">可参加的考试</h2>
+    <div class="sub" style="margin-bottom:14px">只展示已发布（PUBLISHED）的考试；提交过的考试可查看成绩。</div>
+    <div id="examList"><div class="empty">加载中…</div></div>
+  </section>
+
+  <!-- 视图 2：答题 -->
+  <section id="view-exam" style="display:none">
+    <div class="card" style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div>
+          <h2 id="examTitle" style="font-size:16px"></h2>
+          <div class="sub" id="examSub"></div>
+        </div>
+        <div style="text-align:right">
+          <div class="sub">剩余时间</div>
+          <div class="timer" id="timer">--:--</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div class="card">
+        <div class="q-head">
+          <div class="q-meta" id="qMeta"></div>
+          <div class="q-meta" id="qType"></div>
+        </div>
+        <div class="q-stem" id="qStem"></div>
+        <div id="qOptions"></div>
+        <div style="display:flex;justify-content:space-between;margin-top:18px">
+          <button class="ghost" id="btnPrev">← 上一题</button>
+          <div style="display:flex;gap:8px">
+            <button class="ghost" id="btnNext">下一题 →</button>
+            <button class="primary" id="btnSubmit">交卷</button>
+          </div>
+        </div>
+      </div>
+
+      <aside>
+        <div class="card" style="margin-bottom:14px">
+          <div class="sub" style="margin-bottom:8px">答题卡</div>
+          <div class="q-nav" id="qNav"></div>
+        </div>
+
+        <div class="card">
+          <div class="sub" style="margin-bottom:8px">监考演示（模拟 MediaPipe 上报）</div>
+          <div class="sub" style="margin-bottom:10px;font-size:12px">
+            真实环境由前端 MediaPipe 计算头部姿态/视线后自动上报；这里用按钮模拟三档视觉事件，用来观察风险分与告警。
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <button data-k="normal">正常帧</button>
+            <button data-k="tilt">偏转/视线离开</button>
+            <button data-k="missing">人脸丢失</button>
+            <button data-k="multi">多人脸</button>
+          </div>
+          <div class="logbox" id="proctorLog" style="margin-top:10px;max-height:150px">—</div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 视图 3：成绩 -->
+  <section id="view-result" style="display:none">
+    <div class="card" style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div>
+          <h2 id="resTitle" style="font-size:16px">成绩</h2>
+          <div class="sub" id="resSub"></div>
+        </div>
+        <div style="text-align:right">
+          <div class="sub">得分</div>
+          <div style="font-size:26px;font-weight:700" id="resScore">--</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="sub" style="margin-bottom:6px">逐题解析</div>
+      <div id="resItems"></div>
+      <div style="margin-top:16px"><button class="primary" onclick="backToList()">返回到考试列表</button></div>
+    </div>
+  </section>
+</div>
+
+<script src="/common.js"></script>
+<script>
+const me = Auth.require(['STUDENT']);
+if (me) {
+  document.getElementById('who').textContent = me.realName || me.username;
+  document.getElementById('roleTag').textContent = '学生';
+}
+
+const PROFILES = {
+  normal:  { faceDetected: true,  faceCount: 1, yaw: 3,  pitch: 2,  roll: 1,  gazeOffScreen: false, ear: 0.28 },
+  tilt:    { faceDetected: true,  faceCount: 1, yaw: 46, pitch: 35, roll: 30, gazeOffScreen: true,  ear: 0.14 },
+  missing: { faceDetected: false, faceCount: 0, yaw: 0,  pitch: 0,  roll: 0,  gazeOffScreen: false, ear: 0.0  },
+  multi:   { faceDetected: true,  faceCount: 2, yaw: 0,  pitch: 0,  roll: 0,  gazeOffScreen: false, ear: 0.30 }
+};
+
+let state = null;            // { exam, recordId, questions, answers, index, deadline, timerId }
+const DRAFT_KEY = id => 'ea_draft_' + id;
+const RECORD_KEY = id => 'ea_record_' + id;
+
+function switchView(name) {
+  ['list', 'exam', 'result'].forEach(n => {
+    document.getElementById('view-' + n).style.display = (n === name ? '' : 'none');
+  });
+}
+
+/* ---------------- 考试列表 ---------------- */
+async function loadExams() {
+  switchView('list');
+  const box = document.getElementById('examList');
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const exams = await api('GET', '/api/exams');
+    if (!exams.length) { box.innerHTML = '<div class="empty">暂无已发布的考试</div>'; return; }
+    box.innerHTML = exams.map(ex => {
+      const rec = localStorage.getItem(RECORD_KEY(ex.id));
+      const action = rec
+        ? `<button class="ghost" onclick="viewResult(${rec})">查看成绩</button>
+           <button class="primary" onclick="startExam(${ex.id})">重新作答</button>`
+        : `<button class="primary" onclick="startExam(${ex.id})">开始考试</button>`;
+      return `<div class="exam-item">
+        <div>
+          <h3>${esc(ex.title)}</h3>
+          <div class="sub">${esc(ex.description || '')}</div>
+          <div class="sub" style="margin-top:6px">
+            <span class="pill">${ex.questionCount} 题</span>
+            <span class="pill">${ex.durationMinutes} 分钟</span>
+            <span class="pill">总分 ${ex.totalScore}</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex:none">${action}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    box.innerHTML = `<div class="empty bad">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+/* ---------------- 开始考试 ---------------- */
+async function startExam(examId) {
+  try {
+    const r = await api('POST', `/api/exams/${examId}/start`);
+    const draft = JSON.parse(localStorage.getItem(DRAFT_KEY(r.recordId)) || '{}');
+    state = {
+      exam: r,
+      recordId: r.recordId,
+      questions: r.questions,
+      answers: draft.answers || {},
+      index: 0,
+      deadline: Date.now() + r.durationMinutes * 60 * 1000,
+      timerId: null
+    };
+    localStorage.setItem(RECORD_KEY(examId), String(r.recordId));
+    document.getElementById('examTitle').textContent = r.title;
+    document.getElementById('examSub').textContent =
+      `${r.questionCount} 题 · 总分 ${r.totalScore}${r.resumed ? ' · 继续上次作答' : ''}`;
+    switchView('exam');
+    renderNav(); renderQuestion();
+    startTimer();
+    toast(r.resumed ? '已恢复上次作答' : '开始考试，注意剩余时间', 'ok');
+  } catch (e) {
+    toast('无法开始：' + e.message, 'bad');
+    if (e.status === 409) loadExams();
+  }
+}
+
+function startTimer() {
+  clearInterval(state.timerId);
+  const tick = () => {
+    const left = Math.max(0, Math.round((state.deadline - Date.now()) / 1000));
+    const el = document.getElementById('timer');
+    el.textContent = fmtDuration(left);
+    el.className = 'timer' + (left <= 60 ? ' bad' : left <= 300 ? ' warn' : '');
+    if (left === 0) { clearInterval(state.timerId); toast('时间到，自动交卷', 'warn'); submitExam(true); }
+  };
+  tick();
+  state.timerId = setInterval(tick, 1000);
+}
+
+/* ---------------- 渲染题目 ---------------- */
+function currentQuestion() { return state.questions[state.index]; }
+
+function renderNav() {
+  document.getElementById('qNav').innerHTML = state.questions.map((q, i) => {
+    const done = state.answers[q.id] ? 'done' : '';
+    const cur = i === state.index ? 'cur' : '';
+    return `<button class="${done} ${cur}" onclick="gotoQ(${i})">${i + 1}</button>`;
+  }).join('');
+}
+
+function renderQuestion() {
+  const q = currentQuestion();
+  const total = state.questions.length;
+  document.getElementById('qMeta').textContent = `第 ${state.index + 1} / ${total} 题 · ${q.score} 分`;
+  const typeText = { SINGLE: '单选题', MULTIPLE: '多选题', JUDGE: '判断题' }[q.type] || q.type;
+  document.getElementById('qType').textContent = typeText + (q.knowledgePoint ? ' · ' + q.knowledgePoint : '');
+  document.getElementById('qStem').textContent = q.stem;
+
+  const picked = (state.answers[q.id] || '').split('');
+  document.getElementById('qOptions').innerHTML = (q.options || []).map(o => {
+    const sel = picked.includes(o.key) ? 'sel' : '';
+    return `<div class="option ${sel}" onclick="pick('${o.key}')">
+      <div class="k">${esc(o.key)}</div><div>${esc(o.content)}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('btnPrev').disabled = state.index === 0;
+  document.getElementById('btnNext').disabled = state.index === total - 1;
+  renderNav();
+}
+
+function pick(key) {
+  const q = currentQuestion();
+  const multi = q.type === 'MULTIPLE';
+  let cur = state.answers[q.id] || '';
+  if (multi) {
+    const s = new Set(cur.split('').filter(Boolean));
+    s.has(key) ? s.delete(key) : s.add(key);
+    cur = [...s].sort().join('');
+  } else {
+    cur = (cur === key ? '' : key);
+  }
+  state.answers[q.id] = cur;
+  localStorage.setItem(DRAFT_KEY(state.recordId), JSON.stringify({ answers: state.answers }));
+  renderQuestion();
+}
+
+function gotoQ(i) { state.index = i; renderQuestion(); }
+document.getElementById('btnPrev').onclick = () => { if (state.index > 0) gotoQ(state.index - 1); };
+document.getElementById('btnNext').onclick = () => { if (state.index < state.questions.length - 1) gotoQ(state.index + 1); };
+document.getElementById('btnSubmit').onclick = () => {
+  const unanswered = state.questions.filter(q => !state.answers[q.id]).length;
+  const msg = unanswered ? `还有 ${unanswered} 题未作答，确定交卷吗？` : '确定交卷吗？';
+  if (confirm(msg)) submitExam(false);
+};
+
+/* ---------------- 交卷 ---------------- */
+async function submitExam(auto) {
+  clearInterval(state.timerId);
+  try {
+    const answers = state.questions.map(q => ({ questionId: q.id, answer: state.answers[q.id] || '' }));
+    const r = await api('POST', `/api/exams/records/${state.recordId}/submit`,
+      { requestId: 'web-' + Date.now(), answers });
+    localStorage.removeItem(DRAFT_KEY(state.recordId));
+    if (r.examId) localStorage.setItem(RECORD_KEY(r.examId), String(state.recordId));
+    toast(`交卷成功：${r.score} / ${r.totalScore} 分` + (auto ? '（自动交卷）' : ''), 'ok');
+    await showResult(state.recordId);
+  } catch (e) {
+    toast('交卷失败：' + e.message, 'bad');
+  }
+}
+
+/* ---------------- 成绩 ---------------- */
+async function showResult(recordId) {
+  switchView('result');
+  try {
+    const r = await api('GET', `/api/exams/records/${recordId}/result`);
+    document.getElementById('resTitle').textContent = r.title;
+    document.getElementById('resSub').textContent =
+      `状态 ${r.status} · 正确 ${r.items.filter(i => i.correct).length} / ${r.items.length}`;
+    document.getElementById('resScore').textContent = `${r.score} / ${r.totalScore}`;
+    document.getElementById('resItems').innerHTML = r.items.map((it, i) => `
+      <div class="result-row">
+        <div class="q-meta">${i + 1}</div>
+        <div>
+          <div style="margin-bottom:4px">${esc(it.stem)}</div>
+          <div class="sub">你的答案：<b class="${it.correct ? 'ok' : 'bad'}">${esc(it.answerValue || '未作答')}</b>
+            · 正确答案：<b>${esc(it.correctOption)}</b> · 得分 ${it.score}/${it.maxScore}</div>
+          <div class="sub" style="margin-top:4px">解析：${esc(it.analysis || '—')}</div>
+        </div>
+        <div class="${it.correct ? 'ok' : 'bad'}">${it.correct ? '✓' : '✗'}</div>
+      </div>`).join('');
+  } catch (e) {
+    document.getElementById('resItems').innerHTML = `<div class="empty bad">${esc(e.message)}</div>`;
+  }
+}
+
+function viewResult(recordId) { showResult(Number(recordId)); }
+function backToList() { state = null; loadExams(); }
+
+/* ---------------- 监考演示 ---------------- */
+document.querySelectorAll('[data-k]').forEach(b => {
+  b.onclick = async () => {
+    if (!state) return;
+    const body = Object.assign({
+      examRecordId: state.recordId, sessionId: 'web-demo', timestamp: Date.now()
+    }, PROFILES[b.dataset.k]);
+    try {
+      const r = await api('POST', '/api/proctor/events', body);
+      const cls = r.riskLevel === 'L3' ? 'bad' : r.riskLevel === 'L2' ? 'warn' : r.riskLevel === 'L1' ? 'warn' : 'ok';
+      toast(`风险分 ${r.riskScore}（${r.riskLevel || 'NONE'}）` + (r.alertTriggered ? ' · 已推送告警' : ' · 未达告警阈值'), cls);
+      const box = document.getElementById('proctorLog');
+      if (box.dataset.init !== '1') { box.textContent = ''; box.dataset.init = '1'; }
+      box.textContent = `[${fmtTime(Date.now())}] ${b.textContent} → risk=${r.riskScore} ${r.riskLevel}`
+        + (r.alertTriggered ? ' ⚠ 告警' : '') + '\n' + box.textContent;
+    } catch (e) { toast('上报失败：' + e.message, 'bad'); }
+  };
+});
+
+loadExams();
+</script>
+</body>
+</html>

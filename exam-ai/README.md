@@ -62,7 +62,19 @@ powershell -ExecutionPolicy Bypass -File scripts/run.ps1
 mvn -Pboot package && java -jar target/exam-ai.jar
 ```
 
-启动后访问 `http://127.0.0.1:8081/ping`，返回 `pong` 即正常。
+启动后访问 **<http://127.0.0.1:8081/>** 就是 Web 界面（见下）。
+
+### Web 界面（零构建，Spring Boot 直接托管）
+
+| 路径 | 作用 |
+|---|---|
+| `/` | 登录页，按角色跳转 |
+| `/student.html` | **学生端**：考试列表 → 答题（倒计时 / 答题卡 / 草稿自动保存）→ 交卷 → 逐题解析；侧栏可模拟 MediaPipe 视觉事件观察风险分 |
+| `/teacher.html` | **教师端**：WebSocket 实时告警流（L1/L2/L3 统计）、考试列表、LLM 出题、用量与缓存统计 |
+| `/console.html` | 接口调试台：逐个按钮调所有 API，适合演示/联调 |
+
+> 前端是原生 HTML/CSS/JS（无 npm、无构建），与后端同源，所以不需要配 CORS 也能跑；
+> 真实环境的 MediaPipe 在浏览器 WASM 里算特征后上报，这里用按钮模拟三档事件，链路与线上一致。
 
 ### 演示账号（demo 种子数据）
 
@@ -71,6 +83,13 @@ mvn -Pboot package && java -jar target/exam-ai.jar
 | `admin` | `admin123` | ADMIN |
 | `teacher1` | `teacher123` | TEACHER |
 | `student1` / `student2` | `student123` | STUDENT |
+
+### 三分钟体验流程
+
+1. 浏览器 A：登录 `student1` → 开始一场考试 → 随便作答 → **交卷** → 看解析；
+2. 浏览器 B（或隐身窗口）：登录 `teacher1` → 打开监考台；
+3. 回到 A 的考试页，点右侧「**偏转/视线离开**」→ B 立刻收到 L2/L3 告警（等级色标 + 风险分 + 截图链接）；
+4. 回 A 再点一次「交卷」→ 返回 `idempotent=true`，分数不变（幂等）。
 
 ### 一键冒烟（12 步全流程，含幂等与三级告警断言）
 

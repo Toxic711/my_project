@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>监考台 · 智能在线考试系统</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+  .layout{display:grid;grid-template-columns:1.25fr 1fr;gap:16px}
+  @media (max-width:1000px){.layout{grid-template-columns:1fr}}
+  .stat{display:flex;gap:18px;flex-wrap:wrap}
+  .stat div b{font-size:20px}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;background:#64748b}
+  .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(52,211,153,.18)}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="left">
+    <div class="brand" style="margin:0"><div class="logo">考</div><div class="name" style="font-size:15px">智能在线考试系统 · 监考台</div></div>
+    <span class="pill" id="roleTag">教师</span>
+  </div>
+  <div class="right">
+    <span id="who"></span>
+    <span class="sub"><span class="dot" id="wsDot"></span><span id="wsText">未连接</span></span>
+    <button class="ghost" onclick="Auth.logout()">退出登录</button>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="layout">
+    <!-- 实时告警 -->
+    <section class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div>
+          <h2 style="font-size:15px">实时告警流</h2>
+          <div class="sub">订阅全考场（WebSocket）；等级：L1 提示 / L2 警告 / L3 严重</div>
+        </div>
+        <button class="ghost" id="btnWs">重新连接</button>
+      </div>
+      <div class="stat" style="margin:10px 0 12px">
+        <div><div class="sub">告警总数</div><b id="stTotal">0</b></div>
+        <div><div class="sub">L3 严重</div><b class="bad" id="stL3">0</b></div>
+        <div><div class="sub">L2 警告</div><b class="warn" id="stL2">0</b></div>
+        <div><div class="sub">在线监考连接</div><b id="stConn">1</b></div>
+      </div>
+      <div id="alertList" style="max-height:420px;overflow:auto">
+        <div class="empty">等待告警…（在另一个窗口用学生账号答题并点「监考演示」按钮）</div>
+      </div>
+    </section>
+
+    <!-- 右列 -->
+    <div>
+      <section class="card" style="margin-bottom:16px">
+        <h2 style="font-size:15px;margin-bottom:8px">考试列表</h2>
+        <div class="sub" style="margin-bottom:10px">教师可见全部考试（含草稿）；学生只看到已发布的。</div>
+        <div id="examList"><div class="empty">加载中…</div></div>
+      </section>
+
+      <section class="card" style="margin-bottom:16px">
+        <h2 style="font-size:15px;margin-bottom:8px">LLM 自动出题</h2>
+        <div style="display:grid;grid-template-columns:1fr 90px;gap:8px">
+          <div><label>知识点</label><input id="kp" value="JVM 内存模型"></div>
+          <div><label>题数</label><input id="cnt" value="2"></div>
+        </div>
+        <label>难度</label>
+        <select id="diff">
+          <option value="EASY">简单</option>
+          <option value="MEDIUM" selected>中等</option>
+          <option value="HARD">困难</option>
+        </select>
+        <button class="primary" style="width:100%;margin-top:12px" id="btnGen">生成题目</button>
+        <div class="logbox" id="genOut" style="margin-top:10px;max-height:260px">—</div>
+      </section>
+
+      <section class="card">
+        <h2 style="font-size:15px;margin-bottom:8px">运行态统计</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button id="btnUsage">LLM 用量</button>
+          <button id="btnCache">缓存 / 锁后端</button>
+        </div>
+        <div class="logbox" id="statOut" style="margin-top:10px;max-height:200px">—</div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+const me = Auth.require(['TEACHER', 'ADMIN']);
+if (me) {
+  document.getElementById('who').textContent = (me.realName || me.username) + '（' + me.role + '）';
+  document.getElementById('roleTag').textContent = me.role === 'ADMIN' ? '管理员' : '教师';
+}
+
+/* ---------------- WebSocket 实时告警 ---------------- */
+let ws = null, total = 0, cntL2 = 0, cntL3 = 0;
+
+function connectWs() {
+  if (ws) { try { ws.close(); } catch (e) {} }
+  const url = location.origin.replace(/^http/, 'ws') + '/ws/proctor?token=' + encodeURIComponent(Auth.token);
+  ws = new WebSocket(url);
+  const dot = document.getElementById('wsDot'), txt = document.getElementById('wsText');
+  ws.onopen = () => { dot.classList.add('on'); txt.textContent = '已连接'; };
+  ws.onclose = () => { dot.classList.remove('on'); txt.textContent = '已断开（点重连）'; };
+  ws.onerror = () => { dot.classList.remove('on'); txt.textContent = '连接失败'; };
+  ws.onmessage = ev => {
+    let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (msg.type === 'CONNECTED') {
+      txt.textContent = '已连接 · ' + (msg.username || '');
+      return;
+    }
+    if (msg.type === 'PROCTOR_ALERT') renderAlert(msg.alert);
+  };
+}
+
+function renderAlert(a) {
+  total++;
+  if (a.level === 'L3') cntL3++;
+  if (a.level === 'L2') cntL2++;
+  document.getElementById('stTotal').textContent = total;
+  document.getElementById('stL3').textContent = cntL3;
+  document.getElementById('stL2').textContent = cntL2;
+
+  const list = document.getElementById('alertList');
+  if (list.dataset.init !== '1') { list.innerHTML = ''; list.dataset.init = '1'; }
+  const lvCls = a.level === 'L3' ? 'l3' : a.level === 'L2' ? 'l2' : 'l1';
+  const row = document.createElement('div');
+  row.className = 'alert-row';
+  row.innerHTML = `
+    <div class="lv"><span class="pill ${lvCls}">${esc(a.level)}</span></div>
+    <div>
+      <div>试卷记录 #${esc(a.examRecordId)} · 风险分 <b>${esc(a.riskScore)}</b>${a.evidenceUrl ? ' · <a href="' + esc(a.evidenceUrl) + '" target="_blank">查看截图</a>' : ''}</div>
+      <div class="sub">${esc(a.reason || '')}</div>
+    </div>
+    <div class="sub">${fmtTime(a.createdAt || Date.now())}</div>`;
+  list.prepend(row);
+  while (list.children.length > 60) list.lastElementChild.remove();
+  if (a.level === 'L3') toast(`L3 严重告警：记录 #${a.examRecordId} 风险分 ${a.riskScore}`, 'bad');
+}
+
+document.getElementById('btnWs').onclick = connectWs;
+
+/* ---------------- 考试列表 ---------------- */
+async function loadExams() {
+  const box = document.getElementById('examList');
+  try {
+    const exams = await api('GET', '/api/exams');
+    if (!exams.length) { box.innerHTML = '<div class="empty">暂无考试</div>'; return; }
+    box.innerHTML = exams.map(ex => `
+      <div class="exam-item" style="padding:10px 12px">
+        <div>
+          <h3 style="font-size:14px">${esc(ex.title)}</h3>
+          <div class="sub">
+            <span class="pill">${ex.questionCount} 题</span>
+            <span class="pill">${ex.durationMinutes} 分钟</span>
+            <span class="pill">${esc(ex.status)}</span>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    box.innerHTML = `<div class="empty bad">${esc(e.message)}</div>`;
+  }
+}
+
+/* ---------------- 出题 ---------------- */
+document.getElementById('btnGen').onclick = async () => {
+  const out = document.getElementById('genOut');
+  out.textContent = '生成中…';
+  try {
+    const r = await api('POST', '/api/questions/generate', {
+      type: 'SINGLE',
+      knowledgePoint: document.getElementById('kp').value,
+      count: Number(document.getElementById('cnt').value),
+      difficulty: document.getElementById('diff').value
+    });
+    out.textContent = `provider=${r.provider}  model=${r.model}  tokens=${r.usage ? r.usage.totalTokens : '-'}  `
+      + `耗时=${r.latencyMs || '-'}ms\n\n`
+      + (r.questions || []).map((q, i) =>
+          `${i + 1}. ${q.stem}\n   ` + (q.options || []).map(o => `${o.key}. ${o.content}`).join('  ')
+          + `\n   答案：${q.correctOption || '-'}  解析：${q.analysis || '-'}`).join('\n\n');
+  } catch (e) {
+    out.textContent = '生成失败：' + e.message;
+  }
+};
+
+/* ---------------- 统计 ---------------- */
+document.getElementById('btnUsage').onclick = async () => {
+  const out = document.getElementById('statOut');
+  try {
+    const r = await api('GET', '/api/llm/usage');
+    out.textContent = JSON.stringify(r, null, 2);
+  } catch (e) { out.textContent = e.message; }
+};
+document.getElementById('btnCache').onclick = async () => {
+  const out = document.getElementById('statOut');
+  try {
+    const r = await api('GET', '/api/stats/cache');
+    out.textContent = JSON.stringify(r, null, 2);
+  } catch (e) { out.textContent = e.message; }
+};
+
+connectWs();
+loadExams();
+</script>
+</body>
+</html>

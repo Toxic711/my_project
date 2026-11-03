@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  exam-ai:
+    name: exam-ai (Java 17)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: exam-ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: exam-ai/pom.xml
+      - name: Test
+        run: mvn -B -q test
+
+  devflow:
+    name: devflow (Java 21)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: devflow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: devflow/pom.xml
+      - name: Test
+        run: mvn -B -q test

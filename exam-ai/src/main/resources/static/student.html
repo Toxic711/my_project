@@ -88,8 +88,18 @@
             <tr><td class="sub">人脸占比</td><td id="mArea">—</td></tr>
             <tr><td class="sub">头姿 yaw / pitch</td><td id="mPose">—</td></tr>
             <tr><td class="sub">亮度 / 运动</td><td id="mEnv">—</td></tr>
+            <tr><td class="sub">模式</td><td id="mSens">—</td></tr>
             <tr><td class="sub">上报</td><td id="mReport">—</td></tr>
           </table>
+
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+            <button id="btnCal" style="flex:1">校准我的位置</button>
+            <select id="sens" style="width:104px">
+              <option value="low">灵敏度 低</option>
+              <option value="mid" selected>灵敏度 中</option>
+              <option value="high">灵敏度 高</option>
+            </select>
+          </div>
 
           <div class="logbox" id="proctorLog" style="margin-top:8px;max-height:120px">—</div>
 
@@ -329,16 +339,28 @@ async function showResult(recordId) {
 function viewResult(recordId) { showResult(Number(recordId)); }
 function backToList() { state = null; loadExams(); }
 
-/* ================= 摄像头监考：真实视频 + 本地轻量检测 =================
-   说明：本机离线拿不到 MediaPipe 模型资源，所以这里用「肤色 + 运动」的轻量检测
-   产出**同构的特征**（faceDetected / faceCount / yaw / pitch / gazeOffScreen / ear），
-   上报链路与生产完全一致（POST /api/proctor/events），把算法换成 MediaPipe
-   FaceLandmarker 只需要替换 analyzeFrame()，其余不动。
+/* ================= 摄像头监考：真实视频 + 本地检测 =================
+   特征口径与生产一致：faceDetected / faceCount / yaw / pitch / gazeOffScreen / ear
+   本机离线拿不到 MediaPipe 的 .task 模型，这里用 YCbCr 肤色 + 连通域 + 运动做检测，
+   换成 MediaPipe FaceLandmarker 时只需替换 analyzeFrame()。
+   三个防误报设计：
+     ① YCbCr 肤色（比 RGB 规则稳，冷光/暖光都覆盖）；
+     ② 连续 N 帧异常才上报（默认 3 帧 ≈1.2s），单帧抖动不告警；
+     ③ 「校准我的位置」记录基线，判断的是"相对你自己"的偏移，而不是绝对居中。
 */
 const Cam = {
   stream: null, timer: null, canvas: null, ctx: null, shotCanvas: null,
-  W: 96, H: 72, prev: null, motion: 0,
-  lastReportAt: 0, lastState: '', lastLevel: 'NONE', reports: 0, shots: 0
+  W: 96, H: 72, prevLuma: null, motion: 0,
+  lastReportAt: 0, lastState: '正常', reports: 0, shots: 0,
+  badStreak: 0, goodStreak: 0, base: null, baselineFrames: [], calibrating: false,
+  sensitivity: 'mid'
+};
+
+/* 灵敏度：面积阈值、角度阈值、连续帧数 */
+const SENS = {
+  low:  { areaMin: 0.045, yawTh: 34, pitchTh: 30, need: 4 },
+  mid:  { areaMin: 0.030, yawTh: 29, pitchTh: 26, need: 3 },
+  high: { areaMin: 0.020, yawTh: 24, pitchTh: 22, need: 2 }
 };
 
 function camState(text, cls) {
@@ -355,7 +377,7 @@ function camLog(text) {
   if (lines.length > 40) box.textContent = lines.slice(0, 40).join('\n');
 }
 
-/* ---------- 1. 打开/关闭摄像头 ---------- */
+/* ---------- 1. 开关摄像头 ---------- */
 async function startCam() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     camState('当前浏览器不支持摄像头 API，可用下方模拟按钮', 'bad');
@@ -375,7 +397,8 @@ async function startCam() {
     Cam.shotCanvas = document.createElement('canvas');
     Cam.shotCanvas.width = 320; Cam.shotCanvas.height = 240;
 
-    camState('监控中：每 400ms 采一帧做本地检测，状态变化或每 2s 上报一次', 'ok');
+    camState('监控中（灵敏度：' + ({ low: '低', mid: '中', high: '高' })[Cam.sensitivity] + '）'
+      + ' · 建议先点「校准我的位置」', 'ok');
     document.getElementById('btnCam').textContent = '重新开启';
     clearInterval(Cam.timer);
     Cam.timer = setInterval(camTick, 400);
@@ -396,35 +419,87 @@ function stopCam() {
 document.getElementById('btnCam').onclick = startCam;
 document.getElementById('btnCamStop').onclick = stopCam;
 
-/* ---------- 2. 单帧检测：肤色连通域 + 运动能量 ---------- */
+/* 灵敏度切换 */
+const sensSel = document.getElementById('sens');
+if (sensSel) {
+  sensSel.value = Cam.sensitivity;
+  sensSel.onchange = () => { Cam.sensitivity = sensSel.value; camLog('灵敏度切换为 ' + sensSel.value); };
+}
+
+/* 校准：连续采 8 帧算基线（质心 + 面积） */
+const calBtn = document.getElementById('btnCal');
+if (calBtn) {
+  calBtn.onclick = async () => {
+    if (!Cam.timer) { toast('先开启摄像头', 'warn'); return; }
+    Cam.calibrating = true; Cam.baselineFrames = [];
+    camState('校准中，请正坐看着屏幕…', 'warn');
+    await new Promise(r => setTimeout(r, 3000));
+    Cam.calibrating = false;
+    if (Cam.baselineFrames.length >= 4) {
+      const f = Cam.baselineFrames;
+      const avg = k => f.reduce((s, x) => s + x[k], 0) / f.length;
+      Cam.base = { cx: avg('cx'), cy: avg('cy'), area: avg('area') };
+      camState('校准完成：基线 yaw/pitch 已归零，之后判断的是相对偏移', 'ok');
+      camLog(`校准完成 基线 cx=${Cam.base.cx.toFixed(1)} cy=${Cam.base.cy.toFixed(1)} area=${(Cam.base.area * 100).toFixed(1)}%`);
+    } else {
+      camState('校准失败（画面里没检出人脸），请正对镜头再试', 'bad');
+    }
+  };
+}
+
+/* ---------- 2. 单帧检测：YCbCr 肤色 + 膨胀 + 连通域 ---------- */
+const SKIN = { cbMin: 77, cbMax: 135, crMin: 130, crMax: 180, yMin: 45 };
+
 function analyzeFrame(data, w, h) {
   const n = w * h;
   const mask = new Uint8Array(n);
+  const luma = new Uint8Array(n);
   let sum = 0;
+
   for (let i = 0, p = 0; i < n; i++, p += 4) {
     const r = data[p], g = data[p + 1], b = data[p + 2];
-    sum += (r * 299 + g * 587 + b * 114) / 1000;
-    // 经典 RGB 肤色判定（对东亚肤色同样有效）
-    const max = Math.max(r, g, b), min = Math.min(r, g, b);
-    if (r > 95 && g > 40 && b > 20 && max - min > 15 && Math.abs(r - g) > 15 && r > g && r > b) {
+    const y = 0.299 * r + 0.587 * g + 0.114 * b;
+    luma[i] = y; sum += y;
+    const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+    const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+    // 白色墙面/纸（低饱和、高亮度）排除掉，避免背景被当成人脸
+    const nearGrayWhite = y > 215 && Math.abs(cb - 128) < 8 && Math.abs(cr - 128) < 8;
+    if (y > SKIN.yMin && cb >= SKIN.cbMin && cb <= SKIN.cbMax
+        && cr >= SKIN.crMin && cr <= SKIN.crMax && !nearGrayWhite) {
       mask[i] = 1;
     }
   }
   const brightness = sum / n;
 
-  // 运动能量：与上一帧的灰度差
-  let diff = 0;
-  if (Cam.prev) {
-    for (let i = 0; i < n; i++) diff += Math.abs(Cam.prev[i] - (mask[i] ? 1 : 0));
-    Cam.motion = Math.min(1, (diff / n) * 6);
+  // 运动能量：灰度帧间差
+  if (Cam.prevLuma) {
+    let diff = 0;
+    for (let i = 0; i < n; i++) diff += Math.abs(Cam.prevLuma[i] - luma[i]);
+    Cam.motion = Math.min(1, diff / n / 12);
+  }
+  Cam.prevLuma = luma;
+
+  // 3×3 膨胀一次：把反光/眼镜切开的肤色块粘起来
+  const dil = new Uint8Array(n);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!mask[i]) continue;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx >= 0 && nx < w && ny >= 0 && ny < h) dil[ny * w + nx] = 1;
+        }
+      }
+    }
   }
 
-  // 连通域（4 邻域，BFS）：找出最大的两块肤色区域
+  // 连通域（4 邻域 BFS），取最大两块
   const seen = new Uint8Array(n);
   const blobs = [];
   const stack = [];
   for (let idx = 0; idx < n; idx++) {
-    if (!mask[idx] || seen[idx]) continue;
+    if (!dil[idx] || seen[idx]) continue;
     stack.length = 0; stack.push(idx); seen[idx] = 1;
     let count = 0, sx = 0, sy = 0, minX = w, maxX = 0, minY = h, maxY = 0;
     while (stack.length) {
@@ -434,58 +509,77 @@ function analyzeFrame(data, w, h) {
       if (x < minX) minX = x; if (x > maxX) maxX = x;
       if (y < minY) minY = y; if (y > maxY) maxY = y;
       const nb = [cur - 1, cur + 1, cur - w, cur + w];
-      for (const q of nb) {
-        if (q < 0 || q >= n) continue;
-        if (Math.abs((q % w) - x) > 1) continue;    // 防跨行
-        if (mask[q] && !seen[q]) { seen[q] = 1; stack.push(q); }
+      for (let k = 0; k < 4; k++) {
+        const q = nb[k];
+        if (q < 0 || q >= n || dil[q] === 0 || seen[q]) continue;
+        if (Math.abs((q % w) - x) > 1) continue;
+        seen[q] = 1; stack.push(q);
       }
     }
-    if (count >= n * 0.01) blobs.push({ count, cx: sx / count, cy: sy / count, minX, maxX, minY, maxY });
+    if (count >= n * 0.006) {
+      const bw = maxX - minX + 1, bh = maxY - minY + 1;
+      blobs.push({
+        count, cx: sx / count, cy: sy / count, minX, maxX, minY, maxY,
+        bw, bh, aspect: bw / bh,
+        band: (minY <= 1 && maxY >= h - 2)     // 贯穿上下边：墙面/门框/窗帘，不是脸
+      });
+    }
   }
   blobs.sort((a, b) => b.count - a.count);
 
-  // 存灰度掩码给下一帧算运动
-  Cam.prev = mask;
+  // 只把“像脸”的块当候选人：宽高比合理、不贯穿上下边、质心不在画面边缘
+  const faceLike = blobs.filter(b2 => b2.aspect >= 0.45 && b2.aspect <= 2.2 && !b2.band
+    && b2.cy > h * 0.08 && b2.cy < h * 0.92);
 
-  const main = blobs[0];
+  const main = faceLike[0] || null;
   const areaRatio = main ? main.count / n : 0;
-  const second = blobs[1];
+  const second = faceLike[1];
   const multi = !!(main && second && second.count >= main.count * 0.45
-    && Math.abs(second.cx - main.cx) > w * 0.16);
+    && Math.abs(second.cx - main.cx) > w * 0.16
+    && Math.abs(second.cy - main.cy) < h * 0.30);
 
-  const detected = areaRatio >= 0.02 && brightness >= 22;
-  const yaw = main ? Math.max(-60, Math.min(60, (main.cx / w - 0.5) * 90)) : 0;
-  const pitch = main ? Math.max(-45, Math.min(45, (main.cy / h - 0.46) * 70)) : 0;
-  const gazeOffScreen = detected && (Math.abs(yaw) > 25 || Math.abs(pitch) > 25);
-  // ear 用「脸部上半区暗像素比例」近似：眨眼/闭眼时暗区比例升高
+  const cfg = SENS[Cam.sensitivity] || SENS.mid;
+  const detected = !!main && areaRatio >= cfg.areaMin && brightness >= 20;
+
+  // 以校准基线为参照算偏移（没有基线就用画面中心）
+  const baseCx = Cam.base ? Cam.base.cx : w * 0.5;
+  const baseCy = Cam.base ? Cam.base.cy : h * 0.46;
+  const yaw = main ? Math.max(-70, Math.min(70, (main.cx - baseCx) / w * 110)) : 0;
+  const pitch = main ? Math.max(-50, Math.min(50, (main.cy - baseCy) / h * 90)) : 0;
+  const gazeOffScreen = detected && (Math.abs(yaw) > cfg.yawTh || Math.abs(pitch) > cfg.pitchTh);
+
+  // ear 近似：取人脸框上半区（眼睛带）的暗像素比例
   let ear = 0.30;
   if (main) {
+    const topY = main.minY + Math.round((main.maxY - main.minY) * 0.15);
+    const botY = main.minY + Math.max(2, Math.round((main.maxY - main.minY) * 0.45));
     let dark = 0, total = 0;
-    const topY = main.minY, botY = main.minY + Math.max(2, (main.maxY - main.minY) * 0.4);
     for (let y = topY; y < botY; y++) {
       for (let x = main.minX; x <= main.maxX; x++) {
-        const p = (y * w + x) * 4;
-        if (p < 0 || p + 2 >= data.length) continue;
-        const luma = (data[p] * 299 + data[p + 1] * 587 + data[p + 2] * 114) / 1000;
-        total++; if (luma < 70) dark++;
+        if (x < 0 || x >= w || y < 0 || y >= h) continue;
+        total++;
+        if (luma[y * w + x] < 90) dark++;
       }
     }
-    if (total > 0) ear = Math.max(0.05, Math.min(0.45, 0.1 + (1 - dark / total) * 0.32));
+    if (total > 0) ear = Math.max(0.12, Math.min(0.36, 0.34 - (dark / total) * 0.55));
   }
 
+  // 状态判定（面积过小 = 人离开；面积突增 = 贴近镜头）
   let state = '正常';
-  if (brightness < 22) state = '画面过暗（疑似遮挡）';
-  else if (!detected) state = '未检测到人脸';
+  if (brightness < 20) state = '画面过暗（疑似遮挡）';
+  else if (!main || areaRatio < cfg.areaMin * 0.6) state = '未检测到人脸';
   else if (multi) state = '检测到多人';
   else if (gazeOffScreen) state = '视线/头部偏离';
+  else if (Cam.base && areaRatio > Cam.base.area * 2.2) state = '距离过近';
 
   return {
     brightness, areaRatio, detected, faceCount: multi ? 2 : (detected ? 1 : 0),
-    yaw, pitch, gazeOffScreen, ear, motion: Cam.motion, state
+    yaw, pitch, gazeOffScreen, ear, motion: Cam.motion, state,
+    cx: main ? main.cx : 0, cy: main ? main.cy : 0
   };
 }
 
-/* ---------- 3. 每帧更新 UI，按需上报 ---------- */
+/* ---------- 3. 每帧更新 UI；连续 N 帧异常才上报 ---------- */
 function camTick() {
   const video = document.getElementById('cam');
   if (!video.videoWidth || !Cam.ctx) return;
@@ -493,27 +587,46 @@ function camTick() {
   const img = Cam.ctx.getImageData(0, 0, Cam.W, Cam.H);
   const m = analyzeFrame(img.data, Cam.W, Cam.H);
 
+  // 校准采集中：正坐的帧加入基线
+  if (Cam.calibrating && m.detected) {
+    Cam.baselineFrames.push({ cx: m.cx, cy: m.cy, area: m.areaRatio });
+  }
+
   document.getElementById('mState').textContent = m.state;
   document.getElementById('mState').className = m.state === '正常' ? 'ok' : 'warn';
   document.getElementById('mArea').textContent = (m.areaRatio * 100).toFixed(1) + '%';
   document.getElementById('mPose').textContent = `${m.yaw.toFixed(0)}° / ${m.pitch.toFixed(0)}°`;
   document.getElementById('mEnv').textContent =
     `${m.brightness.toFixed(0)} / ${(m.motion * 100).toFixed(0)}%`;
+  const sensText = { low: '低', mid: '中', high: '高' }[Cam.sensitivity];
+  document.getElementById('mSens').textContent =
+    sensText + (Cam.base ? ' · 已校准' : ' · 未校准');
 
-  const now = Date.now();
-  const changed = m.state !== Cam.lastState;
-  if (!changed && now - Cam.lastReportAt < 2000) return;
+  const abnormal = m.state !== '正常';
+  if (abnormal) { Cam.badStreak++; Cam.goodStreak = 0; } else { Cam.goodStreak++; Cam.badStreak = 0; }
   Cam.lastState = m.state;
+
+  const cfg = SENS[Cam.sensitivity] || SENS.mid;
+  const now = Date.now();
+  // 异常：连续 N 帧确认后立即上报；正常：每 4s 心跳一次
+  const shouldReportNow = abnormal && Cam.badStreak === cfg.need;
+  const heartbeat = !abnormal && now - Cam.lastReportAt > 4000;
+  const stateChangedBack = !abnormal && Cam.goodStreak === 2 && Cam.lastReportedState !== '正常';
+  if (!shouldReportNow && !heartbeat && !stateChangedBack) return;
+
   Cam.lastReportAt = now;
-  reportFrame(m, changed);
+  Cam.lastReportedState = m.state;
+  reportFrame(m, shouldReportNow);
 }
+Cam.lastReportedState = '正常';
 
 /* ---------- 4. 上报（带缩略图，后端存证）---------- */
 async function reportFrame(m, immediate) {
   if (!state) return;
   Cam.reports++;
-  Cam.shots++;
-  const withShot = Cam.shots % 5 === 0 || m.state !== '正常';
+  const unusual = m.state !== '正常';
+  const withShot = unusual || Cam.reports % 6 === 0;
+  if (withShot) Cam.shots++;
   const body = {
     examRecordId: state.recordId,
     sessionId: 'cam-web',
@@ -529,15 +642,11 @@ async function reportFrame(m, immediate) {
   try {
     const r = await api('POST', '/api/proctor/events', body);
     document.getElementById('mReport').textContent =
-      `第 ${Cam.reports} 次 · 上次风险分 ${r.riskScore}（${r.riskLevel || 'NONE'}）`;
-    const bad = r.riskLevel === 'L2' || r.riskLevel === 'L3';
-    if (bad || immediate) {
+      `第 ${Cam.reports} 次 · 风险分 ${r.riskScore}（${r.riskLevel || 'NONE'}）`;
+    if (immediate || r.riskLevel === 'L2' || r.riskLevel === 'L3') {
       camLog(`${m.state} → risk=${r.riskScore} ${r.riskLevel}${r.alertTriggered ? ' ⚠ 已告警' : ''}`);
     }
-    if (r.alertTriggered) {
-      toast(`已触发 ${r.riskLevel} 告警：${r.reason || m.state}`, 'bad');
-    }
-    Cam.lastLevel = r.riskLevel || 'NONE';
+    if (r.alertTriggered) toast(`已触发 ${r.riskLevel} 告警：${r.reason || m.state}`, 'bad');
   } catch (e) {
     camLog('上报失败：' + e.message);
   }
@@ -550,7 +659,7 @@ function snapShot() {
   return c.toDataURL('image/jpeg', 0.6);
 }
 
-/* 切走标签页 → 立刻上报一次“人脸丢失”（真实监考里这是重要信号） */
+/* 切走标签页 → 一次“人脸丢失”信号（真实监考里这是重要信号） */
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && Cam.timer && state) {
     reportFrame({ detected: false, faceCount: 0, yaw: 0, pitch: 0, gazeOffScreen: false, ear: 0, state: '切出标签页' }, true);

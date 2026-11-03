@@ -1,0 +1,37 @@
+# ---- Java / Maven ----
+target/
+*.class
+*.jar
+!/.mvn/wrapper/maven-wrapper.jar
+*.log
+hs_err_pid*
+replay_pid*
+
+# ---- IDE ----
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 运行时产物（本项目的 demo 数据/截图存证）----
+data/
+evidence/
+*.db
+*.mv.db
+*.trace.db
+
+# ---- 本地配置 / 密钥（绝不提交）----
+.env
+*.local.yml
+application-local.yml
+application-secret.yml

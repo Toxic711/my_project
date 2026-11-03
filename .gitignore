@@ -1,0 +1,36 @@
+# ---- Java / Maven（两个子项目都有 target/）----
+**/target/
+*.class
+*.jar
+!**/.mvn/wrapper/maven-wrapper.jar
+*.log
+hs_err_pid*
+replay_pid*
+
+# ---- IDE ----
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 运行时产物 ----
+**/data/
+**/evidence/
+*.db
+*.mv.db
+*.trace.db
+
+# ---- 本地配置 / 密钥（绝不提交）----
+.env
+**/application-local.yml
+**/application-secret.yml

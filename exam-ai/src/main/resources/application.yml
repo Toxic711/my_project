@@ -1,0 +1,57 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: exam-ai
+  profiles:
+    active: demo
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+  mvc:
+    throw-exception-if-no-handler-found: false
+
+app:
+  jwt:
+    # 生产务必通过环境变量 EXAM_JWT_SECRET 覆盖（>=32 字节）
+    secret: "${EXAM_JWT_SECRET:exam-ai-dev-secret-key-please-change-in-prod-0123456789}"
+    expire-minutes: 720
+
+  # ===== 防作弊风险引擎参数（面试重点，详见 docs/DESIGN.md）=====
+  proctor:
+    # 三级告警阈值（简历口径：L1>=40 提示、L2>=65 警告、L3>=85 严重）
+    level1-risk: 40
+    level2-risk: 65
+    level3-risk: 85
+    # 同一考生同级别告警去抖窗口（毫秒）；升级到更高级别会立即放行
+    dedup-window-ms: 3000
+    # 滑窗长度：统计“持续异常比例”，抑制单帧抖动
+    window-ms: 5000
+    # 单会话最多保留的事件数，防止长考试内存膨胀
+    max-window-events: 50
+    # L3 需要连续 N 次命中才升级（防单帧误判）
+    level3-consecutive: 3
+    # 人脸数 >= 该值判定多人脸
+    multi-face-threshold: 2
+    # 截图存证开关与单张上限
+    evidence-enabled: true
+    evidence-max-bytes: 524288
+
+  # ===== LLM 出题 =====
+  llm:
+    provider: mock          # mock | openai；openai 无 key 时自动降级 mock
+    model: gpt-4o-mini
+    # 通过环境变量 LLM_API_KEY 注入，不要把 key 写进仓库
+    api-key: "${LLM_API_KEY:}"
+    base-url: "${LLM_BASE_URL:https://api.openai.com/v1}"
+    timeout-seconds: 30
+
+  storage:
+    evidence-dir: "./data/evidence"
+
+  # ===== Redis/Redisson（可选：不可用时自动降级本地锁）=====
+  redis:
+    enabled: true
+    address: "redis://127.0.0.1:6379"

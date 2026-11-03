@@ -1,0 +1,24 @@
+* text=auto eol=lf
+*.java text eol=lf
+*.xml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sql text eol=lf
+*.md text eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+
+[*.java]
+charset = utf-8
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,xml,json,html,css,js}]
+charset = utf-8
+indent_style = space
+indent_size = 2
+
+[*.sql]
+charset = utf-8
+indent_style = space
+indent_size = 4

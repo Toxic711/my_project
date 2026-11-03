@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    # 生产数据库连接：账号密码用环境变量注入，不要提交到仓库
+    url: "jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:exam_ai}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false"
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: "${DB_USER:root}"
+    password: "${DB_PASSWORD:}"
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  sql:
+    init:
+      mode: never
+
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true

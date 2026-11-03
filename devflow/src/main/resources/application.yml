@@ -1,0 +1,75 @@
+server:
+  port: 8082
+  # SSE 需要关闭响应压缩缓冲，否则 Nginx/中间层会攒包导致"流式变成了等一整块"
+  compression:
+    enabled: false
+
+spring:
+  application:
+    name: devflow
+  profiles:
+    active: demo
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+  mvc:
+    async:
+      # 与 app.chat.sse-timeout-ms 保持一致；小于等于网关 idle timeout
+      request-timeout: 120000
+
+app:
+  llm:
+    # mock | openai | anthropic —— 离线环境下 mock 是唯一可用实现（降级链终点）
+    provider: mock
+    default-model: gpt-4o-mini
+    timeout-seconds: 60
+    max-retries: 2
+    retry-backoff-ms: 200
+    max-diff-chars: 12000
+    max-review-segments: 3
+    mock-stream-delay-ms: 12
+    openai:
+      base-url: "https://api.openai.com/v1"
+      api-key: "${OPENAI_API_KEY:}"   # 留空 = 不可用，路由自动跳过；用环境变量注入，不要写进仓库
+      model: gpt-4o-mini
+      enabled: true
+    anthropic:
+      base-url: "https://api.anthropic.com/v1"
+      api-key: "${ANTHROPIC_API_KEY:}"
+      model: claude-3-5-sonnet-20241022
+      version: "2023-06-01"
+      enabled: true
+    # 成本单价（美元 / 1K tokens）；未知模型的成本记 0，但 token 数仍统计
+    pricing:
+      gpt-4o-mini:
+        input-per1k: 0.00015
+        output-per1k: 0.0006
+      gpt-4o:
+        input-per1k: 0.0025
+        output-per1k: 0.01
+      claude-3-5-sonnet-20241022:
+        input-per1k: 0.003
+        output-per1k: 0.015
+      mock-deterministic:
+        input-per1k: 0
+        output-per1k: 0
+  github:
+    # Webhook 验签密钥：生产用环境变量 GITHUB_WEBHOOK_SECRET 覆盖
+    webhook-secret: "${GITHUB_WEBHOOK_SECRET:devflow-webhook-secret}"
+    max-payload-bytes: 1048576
+  sql-guard:
+    allowed-tables: [users, orders, products]
+    max-rows: 200
+    explain-before-execute: true
+    query-timeout-seconds: 5
+    max-sql-length: 8000
+    auto-append-limit: true
+  chat:
+    sse-timeout-ms: 120000
+    heartbeat-ms: 15000
+    max-tokens: 800
+    temperature: 0.7
+    history-limit: 10
+  seed:
+    enabled: true

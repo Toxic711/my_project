@@ -1,0 +1,2 @@
+-- 已合并到 db/schema.sql（同一份 DDL 同时适配 H2 PostgreSQL 模式与真实 PostgreSQL）。
+-- 保留此文件仅为兼容旧引用；application-demo.yml 已改为指向 classpath:db/schema.sql。

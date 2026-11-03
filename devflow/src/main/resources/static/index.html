@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>DevFlow · AI 开发者效能平台</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --fg:#e2e8f0; --muted:#94a3b8; --pri:#38bdf8; --ok:#34d399; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  header { padding:20px 28px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:14px; }
+  header h1 { margin:0; font-size:20px; }
+  header span { color:var(--muted); font-size:13px; }
+  main { display:grid; grid-template-columns:1fr 1fr; gap:18px; padding:20px 28px 40px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+  .card h2 { margin:0 0 12px; font-size:15px; color:var(--pri); }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  input, textarea, select { width:100%; background:#0b1220; color:var(--fg); border:1px solid var(--line);
+                            border-radius:6px; padding:8px 10px; font:inherit; }
+  textarea { min-height:80px; resize:vertical; font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  button { margin-top:12px; background:var(--pri); color:#06121f; border:0; border-radius:6px;
+           padding:8px 16px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  pre { background:#0b1220; border:1px solid var(--line); border-radius:6px; padding:10px;
+        max-height:220px; overflow:auto; font-size:12px; white-space:pre-wrap; word-break:break-word; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .muted { color:var(--muted); }
+  .pill { display:inline-block; border:1px solid var(--line); border-radius:999px;
+          padding:1px 8px; font-size:12px; margin:0 4px 4px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DevFlow</h1>
+  <span>AI 开发者效能平台 · 演示页（零构建，纯原生 JS）</span>
+</header>
+
+<main>
+  <section class="card">
+    <h2>1. Prompt 模板与流式对话（SSE）</h2>
+    <label>模板 code</label>
+    <select id="promptCode"><option value="chat">chat</option><option value="code-review">code-review</option><option value="sql-generate">sql-generate</option></select>
+    <label>输入（变量 question）</label>
+    <input id="question" value="用三句话解释 Redis 缓存穿透与解决方案">
+    <button id="btnChat">流式提问</button>
+    <pre id="chatOut" class="muted">等待输出…</pre>
+  </section>
+
+  <section class="card">
+    <h2>2. 自然语言 → SQL（带护栏）</h2>
+    <label>问题</label>
+    <input id="sqlQuestion" value="统计每个客户的下单数量，按数量倒序">
+    <button id="btnGen">生成 SQL</button>
+    <pre id="sqlOut" class="muted">—</pre>
+    <label>危险 SQL 试一下（护栏应拒绝）</label>
+    <input id="badSql" value="select * from users; drop table users">
+    <button id="btnGuard">护栏校验</button>
+    <pre id="guardOut" class="muted">—</pre>
+  </section>
+
+  <section class="card">
+    <h2>3. Git Diff 自动 Code Review</h2>
+    <button id="btnSample">载入示例 Diff 并审查</button>
+    <pre id="reviewOut" class="muted">—</pre>
+  </section>
+
+  <section class="card">
+    <h2>4. 用量与成本</h2>
+    <button id="btnUsage">刷新统计</button>
+    <pre id="usageOut" class="muted">—</pre>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const show = (id, text) => { $(id).textContent = text; $(id).className = ''; };
+const fail = (id, e) => { $(id).textContent = '请求失败：' + e; $(id).className = 'bad'; };
+
+// 1) SSE 流式对话：用原生 EventSource 读取（GET 版本）
+$('btnChat').onclick = () => {
+  const code = $('promptCode').value;
+  const q = encodeURIComponent($('question').value);
+  const out = $('chatOut');
+  out.textContent = '';
+  out.className = '';
+  const es = new EventSource(`/api/chat/stream?promptCode=${code}&question=${q}`);
+  es.addEventListener('message', (ev) => { if (ev.data) out.textContent += ev.data; });
+  es.addEventListener('error', () => { es.close(); });
+  es.addEventListener('done', () => { es.close(); });
+  setTimeout(() => es.close(), 20000);
+};
+
+// 2) 生成 SQL + 执行
+$('btnGen').onclick = async () => {
+  try {
+    const r = await fetch('/api/sql/generate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ question: $('sqlQuestion').value })
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const g = await r.json();
+    let text = 'SQL: ' + g.sql + '\n涉及表: ' + JSON.stringify(g.tables) + '  LIMIT=' + g.appliedLimit + '\n';
+    const e = await fetch('/api/sql/execute', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sql: g.sql })
+    });
+    if (e.ok) {
+      const ex = await e.json();
+      text += '执行列: ' + JSON.stringify(ex.columns) + '\n行数: ' + (ex.rows ? ex.rows.length : 0) + '\n';
+    }
+    show('sqlOut', text);
+  } catch (e) { fail('sqlOut', e); }
+};
+
+$('btnGuard').onclick = async () => {
+  try {
+    const r = await fetch('/api/sql/guard-check', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ sql: $('badSql').value })
+    });
+    const j = await r.json();
+    const allowed = r.ok && j.allowed;
+    $('guardOut').textContent = 'allowed=' + j.allowed + '\nreason=' + (j.reason || '-');
+    $('guardOut').className = allowed ? 'ok' : 'bad';
+  } catch (e) { fail('guardOut', e); }
+};
+
+// 3) Diff 审查
+$('btnSample').onclick = async () => {
+  try {
+    const s = await (await fetch('/api/review/sample')).json();
+    const r = await fetch('/api/review', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ diff: s.diff, repo: 'demo/repo', prNumber: 42 })
+    });
+    const j = await r.json();
+    const lines = (j.findings || []).map(f => `[${f.severity}] ${f.file}:${f.line} ${f.message}`);
+    show('reviewOut', `runId=${j.runId} status=${j.status} 发现=${lines.length}\n` + lines.join('\n'));
+  } catch (e) { fail('reviewOut', e); }
+};
+
+// 4) 用量
+$('btnUsage').onclick = async () => {
+  try {
+    const j = await (await fetch('/api/usage/summary')).json();
+    show('usageOut', JSON.stringify(j, null, 2));
+  } catch (e) { fail('usageOut', e); }
+};
+</script>
+</body>
+</html>
